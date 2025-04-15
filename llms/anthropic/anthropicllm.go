@@ -139,6 +139,14 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 	var thinking *anthropicclient.Thinking
 	temperature := &opts.Temperature
 	topP := &opts.TopP
+	// Retain current behaviour of omitting zero values from payload.
+	// This is needed because as of now llms.CallOptions cannot really distinguish between 0 and absent values.
+	if opts.Temperature == 0 {
+		temperature = nil
+	}
+	if opts.TopP == 0 {
+		topP = nil
+	}
 	if opts.Reasoning != nil && opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeTokens && opts.Reasoning.Tokens >= anthropicclient.MinThinkingTokens {
 		thinking = &anthropicclient.Thinking{
 			Type:         anthropicclient.Enabled,

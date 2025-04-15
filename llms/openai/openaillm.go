@@ -118,6 +118,14 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if opts.JSONMode {
 		req.ResponseFormat = ResponseFormatJSON
 	}
+	// Retain current behaviour of omitting zero values from payload.
+	// This is needed because as of now llms.CallOptions cannot really distinguish between 0 and absent values.
+	if opts.Temperature == 0 {
+		req.Temperature = nil
+	}
+	if opts.TopP == 0 {
+		req.TopP = nil
+	}
 	if opts.Reasoning != nil && opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeLevel && opts.Reasoning.Level != "" {
 		req.ReasoningEffort = opts.Reasoning.Level
 		// Omit temperature and topP when thinking
