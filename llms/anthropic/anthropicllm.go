@@ -136,16 +136,30 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 	}
 
 	tools := toolsToTools(opts.Tools)
+	var thinking *anthropicclient.Thinking
+	temperature := &opts.Temperature
+	topP := &opts.TopP
+	if opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeTokens && opts.Reasoning.Tokens >= anthropicclient.MinThinkingTokens {
+		thinking = &anthropicclient.Thinking{
+			Type:         anthropicclient.Enabled,
+			BudgetTokens: opts.Reasoning.Tokens,
+		}
+		// Omit temperature and topP when thinking
+		temperature = nil
+		topP = nil
+	}
 	result, err := o.client.CreateMessage(ctx, &anthropicclient.MessageRequest{
-		Model:         opts.Model,
-		Messages:      chatMessages,
-		System:        systemPrompt,
-		MaxTokens:     opts.MaxTokens,
-		StopWords:     opts.StopWords,
-		Temperature:   opts.Temperature,
-		TopP:          opts.TopP,
-		Tools:         tools,
-		StreamingFunc: opts.StreamingFunc,
+		Model:                  opts.Model,
+		Messages:               chatMessages,
+		System:                 systemPrompt,
+		MaxTokens:              opts.MaxTokens,
+		StopWords:              opts.StopWords,
+		Temperature:            temperature,
+		TopP:                   topP,
+		Tools:                  tools,
+		StreamingFunc:          opts.StreamingFunc,
+		StreamingReasoningFunc: opts.StreamingReasoningFunc,
+		Thinking:               thinking,
 	})
 	if err != nil {
 		if o.CallbacksHandler != nil {

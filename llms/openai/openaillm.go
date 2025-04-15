@@ -95,13 +95,15 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 
 		chatMsgs = append(chatMsgs, msg)
 	}
+
 	req := &openaiclient.ChatRequest{
 		Model:                  opts.Model,
 		StopWords:              opts.StopWords,
 		Messages:               chatMsgs,
 		StreamingFunc:          opts.StreamingFunc,
 		StreamingReasoningFunc: opts.StreamingReasoningFunc,
-		Temperature:            opts.Temperature,
+		Temperature:            &opts.Temperature,
+		TopP:                   &opts.TopP,
 		N:                      opts.N,
 		FrequencyPenalty:       opts.FrequencyPenalty,
 		PresencePenalty:        opts.PresencePenalty,
@@ -115,6 +117,12 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	}
 	if opts.JSONMode {
 		req.ResponseFormat = ResponseFormatJSON
+	}
+	if opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeLevel && opts.Reasoning.Level != "" {
+		req.ReasoningEffort = opts.Reasoning.Level
+		// Omit temperature and topP when thinking
+		req.Temperature = nil
+		req.TopP = nil
 	}
 
 	// since req.Functions is deprecated, we need to use the new Tools API.

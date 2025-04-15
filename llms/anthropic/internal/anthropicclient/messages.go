@@ -14,21 +14,38 @@ import (
 )
 
 var (
-	ErrInvalidEventType        = fmt.Errorf("invalid event type field type")
-	ErrInvalidMessageField     = fmt.Errorf("invalid message field type")
-	ErrInvalidUsageField       = fmt.Errorf("invalid usage field type")
-	ErrInvalidIndexField       = fmt.Errorf("invalid index field type")
-	ErrInvalidDeltaField       = fmt.Errorf("invalid delta field type")
-	ErrInvalidDeltaTypeField   = fmt.Errorf("invalid delta type field type")
-	ErrInvalidDeltaTextField   = fmt.Errorf("invalid delta text field type")
-	ErrContentIndexOutOfRange  = fmt.Errorf("content index out of range")
-	ErrFailedCastToTextContent = fmt.Errorf("failed to cast content to TextContent")
-	ErrInvalidFieldType        = fmt.Errorf("invalid field type")
+	ErrInvalidEventType                   = fmt.Errorf("invalid event type field type")
+	ErrInvalidMessageField                = fmt.Errorf("invalid message field type")
+	ErrInvalidUsageField                  = fmt.Errorf("invalid usage field type")
+	ErrInvalidIndexField                  = fmt.Errorf("invalid index field type")
+	ErrInvalidDeltaField                  = fmt.Errorf("invalid delta field type")
+	ErrInvalidDeltaTypeField              = fmt.Errorf("invalid delta type field type")
+	ErrInvalidDeltaTextField              = fmt.Errorf("invalid delta text field type")
+	ErrContentIndexOutOfRange             = fmt.Errorf("content index out of range")
+	ErrFailedCastToTextContent            = fmt.Errorf("failed to cast content to TextContent")
+	ErrInvalidDeltaThinkingField          = fmt.Errorf("invalid delta thinking field type")
+	ErrFailedCastToThinkingContent        = fmt.Errorf("failed to cast content to ThinkingContent")
+	ErrInvalidDeltaThinkingSignatureField = fmt.Errorf("invalid delta thinking signature field type")
+	ErrInvalidFieldType                   = fmt.Errorf("invalid field type")
 )
 
 type ChatMessage struct {
 	Role    string      `json:"role"`
 	Content interface{} `json:"content"`
+}
+
+const MinThinkingTokens = 1024
+
+type ThinkingType string
+
+const (
+	Enabled  ThinkingType = "enabled"
+	Disabled ThinkingType = "disabled"
+)
+
+type Thinking struct {
+	Type         ThinkingType `json:"type"`
+	BudgetTokens int          `json:"budget_tokens"`
 }
 
 type messagePayload struct {
@@ -38,11 +55,13 @@ type messagePayload struct {
 	MaxTokens   int           `json:"max_tokens,omitempty"`
 	StopWords   []string      `json:"stop_sequences,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
-	Temperature float64       `json:"temperature"`
+	Temperature *float64      `json:"temperature,omitempty"`
 	Tools       []Tool        `json:"tools,omitempty"`
-	TopP        float64       `json:"top_p,omitempty"`
+	TopP        *float64      `json:"top_p,omitempty"`
+	Thinking    *Thinking     `json:"thinking,omitempty"`
 
-	StreamingFunc func(ctx context.Context, chunk []byte) error `json:"-"`
+	StreamingFunc          func(ctx context.Context, chunk []byte) error                 `json:"-"`
+	StreamingReasoningFunc func(ctx context.Context, reasoningChunk, chunk []byte) error `json:"-"`
 }
 
 // Tool used for the request message payload.
@@ -102,6 +121,25 @@ func (trc ToolResultContent) GetType() string {
 	return trc.Type
 }
 
+type ThinkingContent struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+func (thc ThinkingContent) GetType() string {
+	return thc.Type
+}
+
+type RedactedThinkingContent struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
+}
+
+func (rthc RedactedThinkingContent) GetType() string {
+	return rthc.Type
+}
+
 type MessageResponsePayload struct {
 	Content      []Content `json:"content"`
 	ID           string    `json:"id"`
@@ -149,6 +187,18 @@ func (m *MessageResponsePayload) UnmarshalJSON(data []byte) error {
 				return err
 			}
 			m.Content = append(m.Content, tuc)
+		case "thinking":
+			thc := &ThinkingContent{}
+			if err := json.Unmarshal(raw, thc); err != nil {
+				return err
+			}
+			m.Content = append(m.Content, thc)
+		case "redacted_thinking":
+			rthc := &RedactedThinkingContent{}
+			if err := json.Unmarshal(raw, rthc); err != nil {
+				return err
+			}
+			m.Content = append(m.Content, rthc)
 		default:
 			return fmt.Errorf("unknown content type: %s\n%v", typeStruct.Type, string(raw))
 		}
@@ -178,7 +228,7 @@ func (c *Client) setMessageDefaults(payload *messagePayload) {
 	default:
 		payload.Model = defaultModel
 	}
-	if payload.StreamingFunc != nil {
+	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil {
 		payload.Stream = true
 	}
 }
@@ -201,7 +251,7 @@ func (c *Client) createMessage(ctx context.Context, payload *messagePayload) (*M
 		return nil, c.decodeError(resp)
 	}
 
-	if payload.StreamingFunc != nil {
+	if payload.StreamingFunc != nil || payload.StreamingReasoningFunc != nil {
 		return parseStreamingMessageResponse(ctx, resp, payload)
 	}
 
@@ -330,9 +380,15 @@ func handleContentBlockStartEvent(event map[string]interface{}, response Message
 	}
 
 	if len(response.Content) <= index {
-		response.Content = append(response.Content, &TextContent{
-			Type: eventType,
-		})
+		if eventType == "thinking" {
+			response.Content = append(response.Content, &ThinkingContent{
+				Type: eventType,
+			})
+		} else if eventType == "text" {
+			response.Content = append(response.Content, &TextContent{
+				Type: eventType,
+			})
+		} // There may be redated thinking blocks in content block start
 	}
 	return response, nil
 }
@@ -353,8 +409,10 @@ func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interfac
 		return response, ErrInvalidDeltaTypeField
 	}
 
+	text := ""
+	thinkingText := ""
 	if deltaType == "text_delta" {
-		text, ok := delta["text"].(string)
+		text, ok = delta["text"].(string)
 		if !ok {
 			return response, ErrInvalidDeltaTextField
 		}
@@ -366,16 +424,44 @@ func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interfac
 			return response, ErrFailedCastToTextContent
 		}
 		textContent.Text += text
+	} else if deltaType == "thinking_delta" {
+		thinkingText, ok = delta["thinking"].(string)
+		if !ok {
+			return response, ErrInvalidDeltaThinkingField
+		}
+		if len(response.Content) <= index {
+			return response, ErrContentIndexOutOfRange
+		}
+		thinkingContent, ok := response.Content[index].(*ThinkingContent)
+		if !ok {
+			return response, ErrFailedCastToThinkingContent
+		}
+		thinkingContent.Thinking += thinkingText
+	} else if deltaType == "signature_delta" {
+		signatureText, ok := delta["signature"].(string)
+		if !ok {
+			return response, ErrInvalidDeltaThinkingSignatureField
+		}
+		if len(response.Content) <= index {
+			return response, ErrContentIndexOutOfRange
+		}
+		thinkingContent, ok := response.Content[index].(*ThinkingContent)
+		if !ok {
+			return response, ErrFailedCastToThinkingContent
+		}
+		thinkingContent.Signature += signatureText
 	}
 
-	if payload.StreamingFunc != nil {
-		text, ok := delta["text"].(string)
-		if !ok {
-			return response, ErrInvalidDeltaTextField
-		}
+	if payload.StreamingFunc != nil && text != "" {
 		err := payload.StreamingFunc(ctx, []byte(text))
 		if err != nil {
 			return response, fmt.Errorf("streaming func returned an error: %w", err)
+		}
+	}
+	if payload.StreamingReasoningFunc != nil && (text != "" || thinkingText != "") {
+		err := payload.StreamingReasoningFunc(ctx, []byte(thinkingText), []byte(text))
+		if err != nil {
+			return response, fmt.Errorf("streaming reasoning func returned an error: %w", err)
 		}
 	}
 	return response, nil
