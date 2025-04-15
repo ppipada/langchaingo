@@ -139,7 +139,7 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 	var thinking *anthropicclient.Thinking
 	temperature := &opts.Temperature
 	topP := &opts.TopP
-	if opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeTokens && opts.Reasoning.Tokens >= anthropicclient.MinThinkingTokens {
+	if opts.Reasoning != nil && opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeTokens && opts.Reasoning.Tokens >= anthropicclient.MinThinkingTokens {
 		thinking = &anthropicclient.Thinking{
 			Type:         anthropicclient.Enabled,
 			BudgetTokens: opts.Reasoning.Tokens,

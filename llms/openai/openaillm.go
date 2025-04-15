@@ -118,7 +118,7 @@ func (o *LLM) GenerateContent(ctx context.Context, messages []llms.MessageConten
 	if opts.JSONMode {
 		req.ResponseFormat = ResponseFormatJSON
 	}
-	if opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeLevel && opts.Reasoning.Level != "" {
+	if opts.Reasoning != nil && opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeLevel && opts.Reasoning.Level != "" {
 		req.ReasoningEffort = opts.Reasoning.Level
 		// Omit temperature and topP when thinking
 		req.Temperature = nil
