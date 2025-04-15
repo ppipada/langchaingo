@@ -14,19 +14,18 @@ import (
 )
 
 var (
-	ErrInvalidEventType                   = fmt.Errorf("invalid event type field type")
-	ErrInvalidMessageField                = fmt.Errorf("invalid message field type")
-	ErrInvalidUsageField                  = fmt.Errorf("invalid usage field type")
-	ErrInvalidIndexField                  = fmt.Errorf("invalid index field type")
-	ErrInvalidDeltaField                  = fmt.Errorf("invalid delta field type")
-	ErrInvalidDeltaTypeField              = fmt.Errorf("invalid delta type field type")
-	ErrInvalidDeltaTextField              = fmt.Errorf("invalid delta text field type")
-	ErrContentIndexOutOfRange             = fmt.Errorf("content index out of range")
-	ErrFailedCastToTextContent            = fmt.Errorf("failed to cast content to TextContent")
-	ErrInvalidDeltaThinkingField          = fmt.Errorf("invalid delta thinking field type")
-	ErrFailedCastToThinkingContent        = fmt.Errorf("failed to cast content to ThinkingContent")
-	ErrInvalidDeltaThinkingSignatureField = fmt.Errorf("invalid delta thinking signature field type")
-	ErrInvalidFieldType                   = fmt.Errorf("invalid field type")
+	ErrInvalidEventType            = fmt.Errorf("invalid event type field type")
+	ErrInvalidMessageField         = fmt.Errorf("invalid message field type")
+	ErrInvalidUsageField           = fmt.Errorf("invalid usage field type")
+	ErrInvalidIndexField           = fmt.Errorf("invalid index field type")
+	ErrInvalidDeltaField           = fmt.Errorf("invalid delta field type")
+	ErrInvalidDeltaTypeField       = fmt.Errorf("invalid delta type field type")
+	ErrInvalidDeltaTextField       = fmt.Errorf("invalid delta text field type")
+	ErrContentIndexOutOfRange      = fmt.Errorf("content index out of range")
+	ErrFailedCastToTextContent     = fmt.Errorf("failed to cast content to TextContent")
+	ErrInvalidDeltaThinkingField   = fmt.Errorf("invalid delta thinking field type")
+	ErrFailedCastToThinkingContent = fmt.Errorf("failed to cast content to ThinkingContent")
+	ErrInvalidFieldType            = fmt.Errorf("invalid field type")
 )
 
 type ChatMessage struct {
@@ -437,20 +436,7 @@ func handleContentBlockDeltaEvent(ctx context.Context, event map[string]interfac
 			return response, ErrFailedCastToThinkingContent
 		}
 		thinkingContent.Thinking += thinkingText
-	} else if deltaType == "signature_delta" {
-		signatureText, ok := delta["signature"].(string)
-		if !ok {
-			return response, ErrInvalidDeltaThinkingSignatureField
-		}
-		if len(response.Content) <= index {
-			return response, ErrContentIndexOutOfRange
-		}
-		thinkingContent, ok := response.Content[index].(*ThinkingContent)
-		if !ok {
-			return response, ErrFailedCastToThinkingContent
-		}
-		thinkingContent.Signature += signatureText
-	}
+	} // ignoring signature delta and redacted delta
 
 	if payload.StreamingFunc != nil && text != "" {
 		err := payload.StreamingFunc(ctx, []byte(text))

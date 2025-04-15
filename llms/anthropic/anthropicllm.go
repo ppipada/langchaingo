@@ -148,13 +148,23 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 		topP = nil
 	}
 	if opts.Reasoning != nil && opts.Reasoning.IsEnabled && opts.Reasoning.Mode == llms.ReasoningModeTokens && opts.Reasoning.Tokens >= anthropicclient.MinThinkingTokens {
-		thinking = &anthropicclient.Thinking{
-			Type:         anthropicclient.Enabled,
-			BudgetTokens: opts.Reasoning.Tokens,
+		tokens := 0
+		if opts.MaxTokens != 0 {
+			if opts.Reasoning.Tokens < opts.MaxTokens {
+				tokens = opts.Reasoning.Tokens
+			} else {
+				tokens = opts.MaxTokens - 1
+			}
 		}
-		// Omit temperature and topP when thinking
-		temperature = nil
-		topP = nil
+		if tokens >= 1024 {
+			thinking = &anthropicclient.Thinking{
+				Type:         anthropicclient.Enabled,
+				BudgetTokens: tokens,
+			}
+			// Omit temperature and topP when thinking
+			temperature = nil
+			topP = nil
+		}
 	}
 	result, err := o.client.CreateMessage(ctx, &anthropicclient.MessageRequest{
 		Model:                  opts.Model,
@@ -179,12 +189,13 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 		return nil, ErrEmptyResponse
 	}
 
-	choices := make([]*llms.ContentChoice, len(result.Content))
-	for i, content := range result.Content {
+	choices := make([]*llms.ContentChoice, 0, len(result.Content))
+	reasoningContent := ""
+	for _, content := range result.Content {
 		switch content.GetType() {
 		case "text":
 			if textContent, ok := content.(*anthropicclient.TextContent); ok {
-				choices[i] = &llms.ContentChoice{
+				choice := &llms.ContentChoice{
 					Content:    textContent.Text,
 					StopReason: result.StopReason,
 					GenerationInfo: map[string]any{
@@ -192,8 +203,25 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 						"OutputTokens": result.Usage.OutputTokens,
 					},
 				}
+				if reasoningContent != "" {
+					// attach a reasoning to the text message and reset it.
+					choice.ReasoningContent = reasoningContent
+					reasoningContent = ""
+				}
+				choices = append(choices, choice)
 			} else {
 				return nil, fmt.Errorf("anthropic: %w for text message", ErrInvalidContentType)
+			}
+		case "thinking":
+			if thinkingContent, ok := content.(*anthropicclient.ThinkingContent); ok {
+				// save the thinking content and attach it to the next text as reasoning content
+				reasoningContent = thinkingContent.Thinking
+			} else {
+				return nil, fmt.Errorf("anthropic: %w for thinking content", ErrInvalidContentType)
+			}
+		case "redacted_thinking":
+			{
+				// NO handling for redacted thinking as of now
 			}
 		case "tool_use":
 			if toolUseContent, ok := content.(*anthropicclient.ToolUseContent); ok {
@@ -201,7 +229,7 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 				if err != nil {
 					return nil, fmt.Errorf("anthropic: failed to marshal tool use arguments: %w", err)
 				}
-				choices[i] = &llms.ContentChoice{
+				choice := &llms.ContentChoice{
 					ToolCalls: []llms.ToolCall{
 						{
 							ID: toolUseContent.ID,
@@ -217,6 +245,7 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 						"OutputTokens": result.Usage.OutputTokens,
 					},
 				}
+				choices = append(choices, choice)
 			} else {
 				return nil, fmt.Errorf("anthropic: %w for tool use message", ErrInvalidContentType)
 			}
@@ -224,7 +253,20 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 			return nil, fmt.Errorf("anthropic: %w: %v", ErrUnsupportedContentType, content.GetType())
 		}
 	}
-
+	// If there was a reasoning block without a subsequent text block, attach that as a separate choice
+	if reasoningContent != "" {
+		lastReasoningChoice := &llms.ContentChoice{
+			Content:    "",
+			StopReason: result.StopReason,
+			GenerationInfo: map[string]any{
+				"InputTokens":  result.Usage.InputTokens,
+				"OutputTokens": result.Usage.OutputTokens,
+			},
+			ReasoningContent: reasoningContent,
+		}
+		// Append to the slice. Worst case scenario slice will grow.
+		choices = append(choices, lastReasoningChoice)
+	}
 	resp := &llms.ContentResponse{
 		Choices: choices,
 	}
